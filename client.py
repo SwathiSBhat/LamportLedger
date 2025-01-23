@@ -29,42 +29,48 @@ blockchain = Blockchain()
 
 def execute_transaction():
 	# Check if operation is valid and if yes, execute the transaction
-    top_lamport_time, top_pid, user_input = queue[0]
+	top_lamport_time, top_pid, user_input = queue[0]
     # user_input if of the form 'transfer 1 2 100'
-    words = user_input.split()
-    src = int(words[1])
-    dest = int(words[2])
-    amount = int(words[3])
+	words = user_input.split()
+	src = int(words[1])
+	dest = int(words[2])
+	amount = int(words[3])
 	
-    global pid
-    global update_count
+	global pid
+	global update_count
     
     # reset reply count to ensure another thread doesn't execute the same transaction
-    reply_count[(top_lamport_time, top_pid)] = 0
+	reply_count[(top_lamport_time, top_pid)] = 0
     
+	# abort transaction if the balance is insufficient
+	if balance_table.get(src, 0) < amount:
+		print(f"FAILURE: Insufficient balance in account of client {src} to transfer {amount}")
+		# Send release message to all clients
+		send_release_msg((top_lamport_time, top_pid))
+		return
+
     # We have already checked if the balance is sufficient before starting the lamport's algorithm
 	# Hence, we can directly execute the transaction
-    balance_table[src] -= amount
-    balance_table[dest] = balance_table.get(dest, 0) + amount
+	balance_table[src] -= amount
+	balance_table[dest] = balance_table.get(dest, 0) + amount
     # Add the transaction to the blockchain
-    blockchain.add_block(user_input)
-    print(f"Transaction '{user_input}' successfully executed at client {pid}")
+	blockchain.add_block(user_input)
+	print(f"SUCCESS: Transaction '{user_input}' successfully executed at client {pid}")
     
     # Send message to update balance table at all clients
-    for pid, sock in pidToSock.items():
-        print(f"Sending balance update to Client {pid} for request ({top_lamport_time}, {top_pid})")
-        sock.sendall(bytes(f"update {top_lamport_time} {top_pid} {user_input}", "utf-8"))
+	for pid, sock in pidToSock.items():
+		sock.sendall(bytes(f"update {top_lamport_time} {top_pid} {user_input}", "utf-8"))
 		
 	# Wait until update_count for the request equals the number of clients
-    while update_count.get((top_lamport_time, top_pid), 0) < len(pidToSock):
-        sleep(0.1)
+	while update_count.get((top_lamport_time, top_pid), 0) < len(pidToSock):
+		sleep(0.1)
 	
-    print(f"Balance table updated at all clients for request ({top_lamport_time}, {top_pid})")
+	print(f"SUCCESS: Balance table updated at all clients for request ({top_lamport_time}, {top_pid})")
 	# Reset update count
-    update_count[(top_lamport_time, top_pid)] = 0
+	update_count[(top_lamport_time, top_pid)] = 0
 	
 	# Send release message to all clients
-    send_release_msg((top_lamport_time, top_pid))
+	send_release_msg((top_lamport_time, top_pid))
 
 # keep waiting and asking for user inputs
 def get_user_input():
@@ -74,9 +80,6 @@ def get_user_input():
 		cmd = user_input.split()[0]
 
 		if cmd == "exit":
-			# close socket before exiting
-			# out_sock_prim.close()
-			# out_sock_sec.close()
 			# close all client sockets
 			for sock in out_socks:
 				sock[0].close()
@@ -104,11 +107,8 @@ def get_user_input():
 				amount = int(words[3])
 				if src == dst:
 					print("Source and destination clients cannot be the same")
-				elif balance_table.get(src, 0) >= amount:
-					# Start lamport's algorithm in a new thread
-					threading.Thread(target=start_lamport_algo, args=(user_input,)).start()
 				else:
-					print(f"Insufficient balance in account {src} to transfer {amount}")
+					threading.Thread(target=start_lamport_algo, args=(user_input,)).start()
 			except:
 				print("Exception in lamport's algorithm")
 				continue
@@ -226,13 +226,11 @@ def handle_client_msg(conn, data):
 						execute_transaction()
 						
 			elif words[0] == "updated":
-				print(f"Client has updated balance table for request ({recv_lamport_time}, {recv_pid})")
 				# with muLock:
 				update_count[(recv_lamport_time, recv_pid)] = update_count.setdefault((recv_lamport_time, recv_pid), 0) + 1
-				print(f"update_count: {update_count}")
 							
 			elif words[0] == "update":
-				print(f"Received update transaction '{user_input}' corresponding to request ({recv_lamport_time}, {recv_pid})")
+				print(f"Received new transaction corresponding to request ({recv_lamport_time}, {recv_pid}) for update")
 				with muLock:
 					# Update balance table and add the transaction to the blockchain
                     # words[1] is the balance table in string format
@@ -282,72 +280,6 @@ def respond(conn, addr):
         # Spawn new thread for every msg to ensure IO is non-blocking
 		threading.Thread(target=handle_client_msg, args=(conn, data)).start() 
 
-# simulates network delay then handles received message
-def handle_msg(data, server_id):
-
-	sleep(3)
-	# decode byte data into a string
-	data = data.decode()
-	words = data.split()
-
-	# Output format:
-	# 1. Success <lamport_time> <pid> for insert
-	# 2. <phone_number or NOT FOUND> lookup <key> for lookup
-
-	# Check if the output is for a lookup 
-	if len(words) == 3 and words[1] == "lookup":
-		print(f"Response from Server {server_id} for operation '{words[1]} {words[2]}' : {words[0]}")
-		return
-	elif len(words) == 4 and words[2] == "lookup":
-		print(f"Response from Server {server_id} for operation '{words[2]} {words[3]}' : {words[0]} {words[1]}")
-		return
-
-	# Need to let the client know that the operation was successful and it can initiate release
-	index_offset = 1 
-	recv_lamport_time = int(words[index_offset])
-	recv_pid = int(words[index_offset + 1])
-
-	# Print the output of cmmand to console
-	print(f"Response from Server {server_id} for request {int(words[1]), int(words[2])} : {words[0]}" )
-
-	# If message is insert, wait for server_response_count to be 2 before sending release
-	# TODO - Assuming that there are no failures and hence just validating for first word to be Success in case its insert
-	if words[0] == "Success":
-		global server_response_count
-		# increment server_response_count for the (recv_lamport_time, recv_pid) by 1 
-		server_response_count[(recv_lamport_time, recv_pid)] = server_response_count.setdefault((recv_lamport_time, recv_pid), 0) + 1
-		if server_response_count[(recv_lamport_time, recv_pid)] == 2:
-			send_release_msg((recv_lamport_time, recv_pid))
-			with muLock:
-				# reset server_response_count
-				server_response_count[(recv_lamport_time, recv_pid)] = 0
-	
-def server_listen(server_id):
-	while True:
-		try:
-			# wait to receive new data, 1024 is receive buffer size
-			# set bigger buffer size if data exceeds 1024 bytes
-			if server_id == 1:
-				data = out_sock_prim.recv(1024)
-			else:
-				data = out_sock_sec.recv(1024)
-		# handle exception in case something happened to connection
-		# but it's not properly closed
-		except:
-			break
-		# if server's socket closed, it will signal closing without any data
-		if not data:
-			# close own socket since other end is closed
-			if server_id == 1:
-				out_sock_prim.close()
-			else:
-				out_sock_sec.close()
-			break
-
-		# spawn a new thread to handle message 
-		# so simulated network delay and message handling don't block receive
-		threading.Thread(target=handle_msg, args=(data,server_id)).start()
-
 def handle_conn_to_client(out_sock, IP, port, pid):
 	connected = False
 	while not connected:
@@ -363,16 +295,6 @@ def handle_conn_to_client(out_sock, IP, port, pid):
 	pidToSock[client_id] = out_sock
 
 	while True:
-		'''
-		try:
-			data = out_sock.recv(1024)
-		except:
-			return
-		if not data:
-			out_sock.shutdown(socket.SHUT_RDWR)
-			out_sock.close()
-			return 
-		'''
 		try:
 			data = out_sock.recv(1024)
 		except Exception as e:
@@ -393,14 +315,12 @@ def handle_conn_to_client(out_sock, IP, port, pid):
 if __name__ == "__main__":
 
 	pid = argv[1]
-	start_ports = int(argv[2])
+	start_ports = 9000
 
 	# specify server's socket address so client can connect to it
 	# since client and server are just different processes on the same machine
 	# server's IP is just local machine's IP
 	SERVER_IP = socket.gethostname()
-	# SERVER_PORT_PRIMARY = start_ports
-	# SERVER_PORT_SECONDARY = start_ports + 1	
 	CLIENT1_PORT = start_ports 
 	CLIENT2_PORT = start_ports + 1
 	CLIENT3_PORT = start_ports + 2
