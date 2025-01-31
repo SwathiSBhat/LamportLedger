@@ -32,7 +32,7 @@ class Blockchain:
             self.head = block_hash
         else:
             prev_hash = self.head
-            block_hash = sha256(str(operation).encode() + str(self.block_num).encode()).hexdigest()
+            block_hash = sha256(str(operation).encode() + str(self.block_num).encode() + prev_hash.encode()).hexdigest()
             self.chain[block_hash] = (self.block_num, operation, prev_hash)
             self.head = block_hash
         self.block_num += 1

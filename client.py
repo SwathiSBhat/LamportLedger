@@ -34,7 +34,7 @@ def execute_transaction():
 	words = user_input.split()
 	src = int(words[1])
 	dest = int(words[2])
-	amount = int(words[3])
+	amount = float(words[3])
 	
 	global pid
 	global update_count
@@ -104,9 +104,11 @@ def get_user_input():
 				words = user_input.split()
 				src = int(words[1])
 				dst = int(words[2])
-				amount = int(words[3])
+				amount = float(words[3])
 				if src == dst:
 					print("Source and destination clients cannot be the same")
+				elif amount < 0:
+					print("Amount cannot be lesser than 0")
 				else:
 					threading.Thread(target=start_lamport_algo, args=(user_input,)).start()
 			except:
@@ -236,7 +238,7 @@ def handle_client_msg(conn, data):
                     # words[1] is the balance table in string format
 					src = int(user_input.split()[1])
 					dest = int(user_input.split()[2])
-					amount = int(user_input.split()[3])
+					amount = float(user_input.split()[3])
 					balance_table[src] -= amount
 					balance_table[dest] += amount
 					blockchain.add_block(user_input)
